@@ -9,14 +9,29 @@ import subprocess
 from pathlib import Path
 from PySide6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                              QWidget, QPushButton, QListWidget, QLabel, QFileDialog, 
-                             QMessageBox, QProgressBar, QInputDialog)
-from PySide6.QtCore import Qt, QThread, Signal
+                             QMessageBox, QProgressBar, QInputDialog, QMenuBar, QMenu)
+from PySide6.QtCore import Qt, QThread, Signal, QTranslator, QLocale
+from PySide6.QtGui import QAction
 
 class OllamaManager:
     """管理Ollama模型的类"""
     
     def __init__(self):
         self.ollama_path = self.find_ollama()
+    
+    def tr(self, text):
+        """简单的翻译方法，实际应用中应使用更完整的国际化方案"""
+        # 这里只是一个简单的占位符实现
+        # 在实际应用中，您可能需要使用 QApplication.instance().translate()
+        # 或者其他更完整的国际化方案
+        return text
+    
+    def tr_with_args(self, text, *args):
+        """支持参数的翻译方法"""
+        translated = self.tr(text)
+        for i, arg in enumerate(args):
+            translated = translated.replace(f"%{i+1}", str(arg))
+        return translated
     
     def find_ollama(self):
         """查找Ollama可执行文件"""
@@ -25,6 +40,8 @@ class OllamaManager:
             "ollama",
             "C:\\Program Files\\Ollama\\ollama.exe",
             "C:\\Users\\{}\\AppData\\Local\\Ollama\\ollama.exe".format(os.getenv('USERNAME')),
+            "/usr/local/bin/ollama",
+            "/usr/bin/ollama",
         ]
         
         for path in possible_paths:
@@ -33,7 +50,11 @@ class OllamaManager:
         
         # 如果在常见路径中找不到，尝试在PATH中查找
         try:
-            result = subprocess.run(["where", "ollama"], capture_output=True, text=True, shell=True)
+            # 在Linux系统上使用 'which' 命令
+            if os.name == 'posix':
+                result = subprocess.run(["which", "ollama"], capture_output=True, text=True)
+            else:
+                result = subprocess.run(["where", "ollama"], capture_output=True, text=True, shell=True)
             if result.returncode == 0:
                 return result.stdout.strip().split('\n')[0]
         except:
@@ -44,13 +65,13 @@ class OllamaManager:
     def list_models(self):
         """列出所有已下载的模型"""
         if not self.ollama_path:
-            raise Exception("未找到Ollama可执行文件")
+            raise Exception(self.tr("Ollama executable not found"))
         
         try:
             result = subprocess.run([self.ollama_path, "list"], 
                                   capture_output=True, text=True, shell=True)
             if result.returncode != 0:
-                raise Exception(f"获取模型列表失败: {result.stderr}")
+                raise Exception(self.tr_with_args("Failed to get model list: %1", result.stderr))
             
             models = []
             lines = result.stdout.strip().split('\n')[1:]  # 跳过标题行
@@ -64,12 +85,12 @@ class OllamaManager:
             
             return models
         except Exception as e:
-            raise Exception(f"列出模型时出错: {str(e)}")
+            raise Exception(self.tr_with_args("Error listing models: %1", str(e)))
     
     def export_model(self, model_name, export_path):
         """导出模型到指定路径"""
         if not self.ollama_path:
-            raise Exception("未找到Ollama可执行文件")
+            raise Exception(self.tr("Ollama executable not found"))
         
         try:
             # 使用 ollama show --modelfile 命令获取模型文件内容
@@ -77,7 +98,7 @@ class OllamaManager:
             result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
             
             if result.returncode != 0:
-                raise Exception(f"获取模型文件失败: {result.stderr}")
+                raise Exception(self.tr_with_args("Failed to get model file: %1", result.stderr))
             
             # 解析 Modelfile 内容找到实际的模型文件路径
             modelfile_content = result.stdout
@@ -90,24 +111,20 @@ class OllamaManager:
                     break
             
             if not model_file_path:
-                raise Exception("无法找到模型文件路径")
+                raise Exception(self.tr("Could not find model file path"))
             
             # 如果模型文件路径是相对路径，则转换为绝对路径
             if model_file_path.startswith('~'):
                 model_file_path = os.path.expanduser(model_file_path)
             elif not os.path.isabs(model_file_path):
                 # 假设模型文件在 Ollama 默认存储路径下
-                if os.name == 'nt':  # Windows系统
-                    ollama_models_dir = os.environ.get('OLLAMA_MODELS', os.path.expanduser('~/.ollama/models'))
-                else:  # Unix-like系统
-                    ollama_models_dir = os.environ.get('OLLAMA_MODELS', os.path.expanduser('~/.ollama/models'))
+                ollama_models_dir = os.environ.get('OLLAMA_MODELS', os.path.expanduser('~/.ollama/models'))
                 model_file_path = os.path.join(ollama_models_dir, 'blobs', model_file_path)
             # 如果模型文件路径已经是绝对路径，直接使用
-            # 注意：在Windows系统中，路径可能包含反斜杠，需要确保正确处理
             
             # 检查模型文件是否存在
             if not os.path.exists(model_file_path):
-                raise Exception(f"模型文件不存在: {model_file_path}")
+                raise Exception(self.tr_with_args("Model file does not exist: %1", model_file_path))
             
             # 复制模型文件到导出路径
             import shutil
@@ -115,12 +132,12 @@ class OllamaManager:
             
             return True
         except Exception as e:
-            raise Exception(f"导出模型时出错: {str(e)}")
+            raise Exception(self.tr_with_args("Error exporting model: %1", str(e)))
     
     def import_model(self, import_path, new_model_name=None):
         """从指定路径导入模型"""
         if not self.ollama_path:
-            raise Exception("未找到Ollama可执行文件")
+            raise Exception(self.tr("Ollama executable not found"))
         
         try:
             # 使用ollama cp命令导入模型
@@ -131,11 +148,11 @@ class OllamaManager:
             result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
             
             if result.returncode != 0:
-                raise Exception(f"导入模型失败: {result.stderr}")
+                raise Exception(self.tr_with_args("Failed to import model: %1", result.stderr))
                 
             return True
         except Exception as e:
-            raise Exception(f"导入模型时出错: {str(e)}")
+            raise Exception(self.tr_with_args("Error importing model: %1", str(e)))
 
 
 class WorkerThread(QThread):
@@ -158,13 +175,15 @@ class WorkerThread(QThread):
                 manager = OllamaManager()
                 model_name, export_path = self.args
                 manager.export_model(model_name, export_path)
-                self.finished.emit(True, f"模型 {model_name} 已成功导出到 {export_path}")
+                message = manager.tr_with_args("Model %1 successfully exported to %2", model_name, export_path)
+                self.finished.emit(True, message)
             elif self.operation == "import":
                 manager = OllamaManager()
                 import_path = self.args[0]
                 new_model_name = self.args[1] if len(self.args) > 1 else None
                 manager.import_model(import_path, new_model_name)
-                self.finished.emit(True, f"模型已成功从 {import_path} 导入")
+                message = manager.tr_with_args("Model successfully imported from %1", import_path)
+                self.finished.emit(True, message)
         except Exception as e:
             self.finished.emit(False, str(e))
 
@@ -172,9 +191,33 @@ class WorkerThread(QThread):
 class MainWindow(QMainWindow):
     """主窗口类"""
     
-    def __init__(self):
+    def __init__(self, language_code=None):
         super().__init__()
-        self.setWindowTitle("Ollama 模型管理器")
+        self.language_code = language_code
+        
+        # 加载翻译文件
+        self.translator = QTranslator()
+        if language_code:
+            locale = language_code
+        else:
+            locale = QLocale.system().name()
+        
+        # 尝试加载翻译文件
+        if locale.startswith('zh'):
+            # 加载中文翻译
+            # 假设翻译文件在当前目录的translations文件夹中
+            self.translator.load("translations/omm_zh.qm")
+        else:
+            # 加载英文翻译
+            # 假设翻译文件在当前目录的translations文件夹中
+            self.translator.load("translations/omm_en.qm")
+        
+        # 安装翻译器
+        app = QApplication.instance()
+        if app:
+            app.installTranslator(self.translator)
+        
+        self.setWindowTitle(self.tr("Ollama Model Manager"))
         self.setGeometry(100, 100, 600, 400)
         
         self.manager = OllamaManager()
@@ -185,34 +228,41 @@ class MainWindow(QMainWindow):
     
     def init_ui(self):
         """初始化用户界面"""
+        # 清除现有的中央部件（如果存在）
+        if self.centralWidget():
+            self.centralWidget().setParent(None)
+        
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
         layout = QVBoxLayout()
         central_widget.setLayout(layout)
         
+        # 创建菜单栏
+        self.create_menu_bar()
+        
         # 标题
-        title_label = QLabel("Ollama 模型管理器")
+        title_label = QLabel(self.tr("Ollama Model Manager"))
         title_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(title_label)
         
         # 模型列表
-        layout.addWidget(QLabel("已下载的模型:"))
+        layout.addWidget(QLabel(self.tr("Downloaded Models:")))
         self.model_list = QListWidget()
         layout.addWidget(self.model_list)
         
         # 按钮布局
         button_layout = QHBoxLayout()
         
-        self.refresh_button = QPushButton("刷新列表")
+        self.refresh_button = QPushButton(self.tr("Refresh List"))
         self.refresh_button.clicked.connect(self.load_models)
         button_layout.addWidget(self.refresh_button)
         
-        self.export_button = QPushButton("导出选中模型")
+        self.export_button = QPushButton(self.tr("Export Selected Model"))
         self.export_button.clicked.connect(self.export_model)
         button_layout.addWidget(self.export_button)
         
-        self.import_button = QPushButton("导入模型")
+        self.import_button = QPushButton(self.tr("Import Model"))
         self.import_button.clicked.connect(self.import_model)
         button_layout.addWidget(self.import_button)
         
@@ -224,13 +274,13 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.progress_bar)
         
         # 状态标签
-        self.status_label = QLabel("就绪")
+        self.status_label = QLabel(self.tr("Ready"))
         self.status_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.status_label)
     
     def load_models(self):
         """加载模型列表"""
-        self.status_label.setText("正在加载模型列表...")
+        self.status_label.setText(self.tr("Loading model list..."))
         self.progress_bar.setVisible(True)
         
         self.worker_thread = WorkerThread("list")
@@ -246,28 +296,28 @@ class MainWindow(QMainWindow):
             self.model_list.clear()
             for model in models:
                 self.model_list.addItem(model)
-            self.status_label.setText(f"已加载 {len(models)} 个模型")
+            self.status_label.setText(self.tr("Loaded %n models", "", len(models)))
         else:
-            QMessageBox.critical(self, "错误", f"加载模型列表失败: {data}")
-            self.status_label.setText("加载模型列表失败")
+            QMessageBox.critical(self, self.tr("Error"), self.tr("Failed to load model list: %1").replace("%1", data))
+            self.status_label.setText(self.tr("Failed to load model list"))
     
     def export_model(self):
         """导出选中的模型"""
         selected_items = self.model_list.selectedItems()
         if not selected_items:
-            QMessageBox.warning(self, "警告", "请先选择一个模型")
+            QMessageBox.warning(self, self.tr("Warning"), self.tr("Please select a model first"))
             return
         
         model_name = selected_items[0].text()
         
         # 选择导出路径
         export_path, _ = QFileDialog.getSaveFileName(
-            self, "选择导出路径", f"{model_name}.gguf", "GGUF Files (*.gguf);;All Files (*)")
+            self, self.tr("Select Export Path"), f"{model_name}.gguf", self.tr("GGUF Files (*.gguf);;All Files (*)"))
         
         if not export_path:
             return
         
-        self.status_label.setText(f"正在导出模型 {model_name}...")
+        self.status_label.setText(self.tr("Exporting model %1...").replace("%1", model_name))
         self.progress_bar.setVisible(True)
         
         self.worker_thread = WorkerThread("export", model_name, export_path)
@@ -279,17 +329,17 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         
         if success:
-            QMessageBox.information(self, "成功", message)
-            self.status_label.setText("模型导出成功")
+            QMessageBox.information(self, self.tr("Success"), message)
+            self.status_label.setText(self.tr("Model exported successfully"))
         else:
-            QMessageBox.critical(self, "错误", f"导出失败: {message}")
-            self.status_label.setText("模型导出失败")
+            QMessageBox.critical(self, self.tr("Error"), self.tr("Export failed: %1").replace("%1", message))
+            self.status_label.setText(self.tr("Model export failed"))
     
     def import_model(self):
         """导入模型"""
         # 选择导入文件
         import_path, _ = QFileDialog.getOpenFileName(
-            self, "选择要导入的模型文件", "", "GGUF Files (*.gguf);;All Files (*)")
+            self, self.tr("Select Model File to Import"), "", self.tr("GGUF Files (*.gguf);;All Files (*)"))
         
         if not import_path:
             return
@@ -299,18 +349,18 @@ class MainWindow(QMainWindow):
         
         # 询问是否需要修改模型名
         new_model_name, ok = QInputDialog.getText(
-            self, "模型名称", "请输入模型名称 (可选):", text=model_name)
+            self, self.tr("Model Name"), self.tr("Please enter model name (optional):"), text=model_name)
         
         # 如果用户取消输入对话框，返回
         if not ok:
-            self.status_label.setText("导入操作已取消")
+            self.status_label.setText(self.tr("Import operation cancelled"))
             return
         
         # 如果用户没有输入新名称，使用默认名称
         if not new_model_name:
             new_model_name = model_name
         
-        self.status_label.setText(f"正在导入模型 {new_model_name}...")
+        self.status_label.setText(self.tr("Importing model %1...").replace("%1", new_model_name))
         self.progress_bar.setVisible(True)
         
         self.worker_thread = WorkerThread("import", import_path, new_model_name)
@@ -322,21 +372,89 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         
         if success:
-            QMessageBox.information(self, "成功", message)
-            self.status_label.setText("模型导入成功")
+            QMessageBox.information(self, self.tr("Success"), message)
+            self.status_label.setText(self.tr("Model imported successfully"))
             # 重新加载模型列表
             self.load_models()
         else:
-            QMessageBox.critical(self, "错误", f"导入失败: {message}")
-            self.status_label.setText("模型导入失败")
+            QMessageBox.critical(self, self.tr("Error"), self.tr("Import failed: %1").replace("%1", message))
+            self.status_label.setText(self.tr("Model import failed"))
+    
+    def create_menu_bar(self):
+        """创建菜单栏"""
+        menu_bar = self.menuBar()
+        
+        # 清除现有菜单
+        menu_bar.clear()
+        
+        # 语言菜单
+        lang_menu = menu_bar.addMenu(self.tr("Language"))
+        
+        # 中文菜单项
+        cn_action = QAction("中文", self)
+        cn_action.triggered.connect(lambda: self.switch_language("zh"))
+        lang_menu.addAction(cn_action)
+        
+        # 英文菜单项
+        en_action = QAction("English", self)
+        en_action.triggered.connect(lambda: self.switch_language("en"))
+        lang_menu.addAction(en_action)
+    
+    def switch_language(self, language_code):
+        """切换语言"""
+        # 移除旧的翻译器
+        app = QApplication.instance()
+        if app and hasattr(self, 'translator'):
+            app.removeTranslator(self.translator)
+        
+        # 创建新的翻译器
+        self.translator = QTranslator()
+        
+        # 尝试加载翻译文件
+        if language_code.startswith('zh'):
+            # 加载中文翻译
+            # 注意：这里需要有实际的翻译文件
+            self.translator.load("translations/omm_zh.qm")
+        else:
+            # 加载英文翻译
+            # 注意：这里需要有实际的翻译文件
+            self.translator.load("translations/omm_en.qm")
+        
+        # 安装新的翻译器
+        if app:
+            app.installTranslator(self.translator)
+        
+        # 更新语言代码
+        self.language_code = language_code
+        
+        # 重新初始化UI以应用新的翻译
+        self.init_ui()
+        
+        # 显示语言切换成功的消息
+        # QMessageBox.information(self, self.tr("Language Switched"), 
+        #                       self.tr("Language switched to %1. Changes will be applied immediately.").replace("%1", language_code))
+        self.load_models()
 
 
 def main():
-    app = QApplication(sys.argv)
-    window = MainWindow()
+    import argparse
+    
+    # 解析命令行参数
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--lang", help="Language code (e.g., 'zh' for Chinese, 'en' for English)")
+    args, unknown = parser.parse_known_args()
+    language_code = args.lang
+    
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv)
+    
+    window = MainWindow(language_code)
     window.show()
-    sys.exit(app.exec())
-
+    return app, window
 
 if __name__ == "__main__":
-    main()
+    app, window = main()
+    if app:
+        sys.exit(app.exec())
+

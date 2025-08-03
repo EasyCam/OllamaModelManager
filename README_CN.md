@@ -9,6 +9,20 @@
 - 支持Windows和Linux系统
 - 图形用户界面操作
 
+## 界面截图
+
+### 主界面
+![主界面](images/0-start.png)
+
+### 导出模型
+![导出模型](images/1-export.png)
+
+### 导出成功
+![导出成功](images/2-sucess.png)
+
+### 导入模型
+![导入模型](images/3-import.png)
+
 ## 系统要求
 
 - Python 3.11+

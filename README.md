@@ -11,21 +11,6 @@ Ollama Model Manager is a graphical tool designed to export Ollama models to GGU
 - Graphical user interface (GUI) for easy operation
 - Cross-platform support (Windows and Linux)
 - Bilingual support (Chinese and English)
-
-## Screenshots
-
-### Main Interface
-![Main Interface](images/0-start.png)
-
-### Export Model
-![Export Model](images/1-export.png)
-
-### Export Success
-![Export Success](images/2-sucess.png)
-
-### Import Model
-![Import Model](images/3-import.png)
-
 ## System Requirements
 
 - Python 3.11 or higher
@@ -57,6 +42,23 @@ Ollama Model Manager is a graphical tool designed to export Ollama models to GGU
    - Click "Refresh List" to load the list of downloaded models
    - Select a model and click "Export Selected Model" to export it to GGUF format
    - Click "Import Model" to import a GGUF file as a new Ollama model
+
+
+
+## Screenshots
+
+### Main Interface
+![Main Interface](images/0-start.png)
+
+### Export Model
+![Export Model](images/1-export.png)
+
+### Export Success
+![Export Success](images/2-sucess.png)
+
+### Import Model
+![Import Model](images/3-import.png)
+
 
 ## Notes
 

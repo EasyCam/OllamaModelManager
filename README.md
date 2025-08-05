@@ -59,6 +59,19 @@ Ollama Model Manager is a graphical tool designed to export Ollama models to GGU
 ### Import Model
 ![Import Model](images/3-import.png)
 
+### Delete Model
+
+![Delete Model](images/4-delete.png)
+
+### Update Model
+
+![Update Model](images/5-update.png)
+
+![Updated](images/6-updated.png)
+
+### Sort Model
+
+![Sort Model](images/7-sort.png)
 
 ## Notes
 

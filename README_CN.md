@@ -55,6 +55,23 @@
 ### 导入模型
 ![导入模型](images/3-import.png)
 
+
+
+### 删除模型
+
+![Delete Model](images/4-delete.png)
+
+### 更新模型
+
+![Update Model](images/5-update.png)
+
+![Updated](images/6-updated.png)
+
+### 排序模型
+
+![Sort Model](images/7-sort.png)
+
+
 ## 注意事项
 
 - 在Windows系统上，如果遇到编码问题，可以在命令行中运行 `chcp 65001` 命令

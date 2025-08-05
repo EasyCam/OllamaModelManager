@@ -2,7 +2,7 @@
 [tool.briefcase]
 project_name = "OllamaModelManager"
 bundle = "easy.cam"
-version = "1.0.0"
+version = "1.0.1"
 url = "https://github.com/EasyCam/OllamaModelManager/"
 license = "GNU General Public License v3 or later (GPLv3+)"
 author = "WeDoNotUse"

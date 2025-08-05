@@ -87,88 +87,81 @@ class OllamaManager:
                 if not line or line.startswith('NAME'):  # 跳过标题行和空行
                     continue
                 
-                # 尝试多种格式匹配
-                # 格式1: model_name:tag    size    modified_date
-                # 格式2: model_name    size    modified_date
-                # 格式3: model_name:tag    size
-                patterns = [
-                    r'^([a-zA-Z0-9_.-]+):([^\s]+)\s+([0-9.]+[KMG]?B?)\s+(.+)$',
-                    r'^([a-zA-Z0-9_.-]+)\s+([0-9.]+[KMG]?B?)\s+(.+)$',
-                    r'^([a-zA-Z0-9_.-]+):([^\s]+)\s+([0-9.]+[KMG]?B?)$',
-                    r'^([a-zA-Z0-9_.-]+)\s+([0-9.]+[KMG]?B?)$'
-                ]
+                # 使用正则表达式匹配 ollama list 的输出格式
+                # 格式: model_name:tag    ID    size    modified_date
+                # 例如: llama3.2:3b    a80c4f17acd5    2.0 GB    7 minutes ago
+                pattern = r'^([a-zA-Z0-9_./-]+):([a-zA-Z0-9_.-]+)\s+([a-f0-9]+)\s+([0-9.]+\s*[KMG]?B?)\s+(.+)$'
+                match = re.match(pattern, line)
                 
-                matched = False
-                for pattern in patterns:
-                    match = re.match(pattern, line)
-                    if match:
-                        groups = match.groups()
-                        if len(groups) == 4:  # 格式1: name:tag size date
-                            model_name = groups[0].strip()
-                            tag = groups[1].strip()
-                            size = groups[2].strip()
-                            modified_date = groups[3].strip()
-                        elif len(groups) == 3:  # 格式2: name size date 或 格式3: name:tag size
-                            if ':' in groups[0]:  # 格式3: name:tag size
-                                name_parts = groups[0].split(':', 1)
-                                model_name = name_parts[0].strip()
-                                tag = name_parts[1].strip()
-                                size = groups[1].strip()
-                                modified_date = groups[2].strip()
-                            else:  # 格式2: name size date
-                                model_name = groups[0].strip()
-                                tag = ""
-                                size = groups[1].strip()
-                                modified_date = groups[2].strip()
-                        elif len(groups) == 2:  # 格式4: name size
-                            if ':' in groups[0]:  # name:tag size
-                                name_parts = groups[0].split(':', 1)
-                                model_name = name_parts[0].strip()
-                                tag = name_parts[1].strip()
-                                size = groups[1].strip()
-                                modified_date = ""
-                            else:  # name size
-                                model_name = groups[0].strip()
-                                tag = ""
-                                size = groups[1].strip()
-                                modified_date = ""
+                if match:
+                    # 匹配成功，提取各个字段
+                    model_name = match.group(1).strip()
+                    tag = match.group(2).strip()
+                    model_id = match.group(3).strip()
+                    size = match.group(4).strip()
+                    modified_date = match.group(5).strip()
+                    
+                    # 创建完整的模型标识符
+                    full_name = f"{model_name}:{tag}"
+                    
+                    models.append({
+                        'name': model_name,
+                        'tag': tag,
+                        'id': model_id,
+                        'full_name': full_name,
+                        'size': size,
+                        'modified_date': modified_date
+                    })
+                else:
+                    # 如果没有匹配到，尝试处理没有标签的模型
+                    # 格式: model_name    ID    size    modified_date
+                    pattern_no_tag = r'^([a-zA-Z0-9_./-]+)\s+([a-f0-9]+)\s+([0-9.]+[KMG]?B?)\s+(.+)$'
+                    match_no_tag = re.match(pattern_no_tag, line)
+                    
+                    if match_no_tag:
+                        model_name = match_no_tag.group(1).strip()
+                        model_id = match_no_tag.group(2).strip()
+                        size = match_no_tag.group(3).strip()
+                        modified_date = match_no_tag.group(4).strip()
                         
                         # 创建完整的模型标识符
-                        full_name = f"{model_name}:{tag}" if tag else model_name
+                        full_name = model_name
                         
                         models.append({
                             'name': model_name,
-                            'tag': tag,
+                            'tag': "",
+                            'id': model_id,
                             'full_name': full_name,
                             'size': size,
                             'modified_date': modified_date
                         })
-                        matched = True
-                        break
-                
-                if not matched:
-                    # 如果所有模式都不匹配，尝试简单的名称提取
-                    parts = line.split()
-                    if parts:
-                        model_name = parts[0]
-                        if ':' in model_name:
-                            name_parts = model_name.split(':', 1)
-                            model_name = name_parts[0].strip()
-                            tag = name_parts[1].strip()
-                        else:
-                            tag = ""
-                        
-                        full_name = f"{model_name}:{tag}" if tag else model_name
-                        size = parts[1] if len(parts) > 1 else ""
-                        modified_date = " ".join(parts[2:]) if len(parts) > 2 else ""
-                        
-                        models.append({
-                            'name': model_name,
-                            'tag': tag,
-                            'full_name': full_name,
-                            'size': size,
-                            'modified_date': modified_date
-                        })
+                    else:
+                        # 如果还是无法匹配，使用简单的分割方法
+                        parts = line.split()
+                        if len(parts) >= 4:
+                            # 检查第一个部分是否包含冒号（有标签）
+                            if ':' in parts[0]:
+                                name_parts = parts[0].split(':', 1)
+                                model_name = name_parts[0].strip()
+                                tag = name_parts[1].strip()
+                                full_name = f"{model_name}:{tag}"
+                            else:
+                                model_name = parts[0].strip()
+                                tag = ""
+                                full_name = model_name
+                            
+                            model_id = parts[1] if len(parts) > 1 else ""
+                            size = parts[2] if len(parts) > 2 else ""
+                            modified_date = " ".join(parts[3:]) if len(parts) > 3 else ""
+                            
+                            models.append({
+                                'name': model_name,
+                                'tag': tag,
+                                'id': model_id,
+                                'full_name': full_name,
+                                'size': size,
+                                'modified_date': modified_date
+                            })
             
             return models
         except subprocess.TimeoutExpired:
@@ -833,10 +826,11 @@ class MainWindow(QMainWindow):
         # 模型表格
         layout.addWidget(QLabel(self.tr("Downloaded Models:")))
         self.model_table = QTableWidget()
-        self.model_table.setColumnCount(4)
+        self.model_table.setColumnCount(5)
         self.model_table.setHorizontalHeaderLabels([
             self.tr("Model Name"),
             self.tr("Tag"),
+            self.tr("ID"),
             self.tr("Size"),
             self.tr("Modified Date")
         ])
@@ -852,8 +846,17 @@ class MainWindow(QMainWindow):
         header = self.model_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.Stretch)  # 模型名称列自适应
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Tag列自适应内容
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # 大小列自适应内容
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # 日期列自适应内容
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # ID列自适应内容
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # 大小列自适应内容
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # 日期列自适应内容
+        
+        # 启用表头点击排序
+        header.setSectionsClickable(True)
+        header.sectionClicked.connect(self.on_header_clicked)
+        
+        # 存储当前排序状态
+        self.current_sort_column = -1
+        self.current_sort_order = Qt.AscendingOrder
         
         layout.addWidget(self.model_table)
         
@@ -1305,13 +1308,17 @@ class MainWindow(QMainWindow):
         tag_item = QTableWidgetItem(model['tag'])
         self.model_table.setItem(row_position, 1, tag_item)
         
+        # 模型ID
+        id_item = QTableWidgetItem(model.get('id', ''))
+        self.model_table.setItem(row_position, 2, id_item)
+        
         # 模型大小
         size_item = QTableWidgetItem(model['size'])
-        self.model_table.setItem(row_position, 2, size_item)
+        self.model_table.setItem(row_position, 3, size_item)
         
         # 模型修改日期
         date_item = QTableWidgetItem(model['modified_date'])
-        self.model_table.setItem(row_position, 3, date_item)
+        self.model_table.setItem(row_position, 4, date_item)
 
     def on_delete_finished(self, success, message):
         """删除完成的回调"""
@@ -1519,6 +1526,72 @@ class MainWindow(QMainWindow):
             self.worker_thread.start()
         else:
             self.status_label.setText(self.tr("Model update cancelled"))
+
+    def on_header_clicked(self, logical_index):
+        """表头点击事件处理"""
+        if logical_index == self.current_sort_column:
+            # 如果点击的是当前排序列，则切换排序顺序
+            self.current_sort_order = Qt.DescendingOrder if self.current_sort_order == Qt.AscendingOrder else Qt.AscendingOrder
+        else:
+            # 如果点击的是新列，则设置为升序
+            self.current_sort_column = logical_index
+            self.current_sort_order = Qt.AscendingOrder
+        
+        # 根据列索引执行相应的排序
+        if logical_index == 0:  # 模型名称列
+            self.sort_models_by_name()
+        elif logical_index == 1:  # Tag列
+            self.sort_models_by_tag()
+        elif logical_index == 2:  # ID列
+            self.sort_models_by_id()
+        elif logical_index == 3:  # 大小列
+            self.sort_models_by_size()
+        elif logical_index == 4:  # 日期列
+            self.sort_models_by_date()
+        
+        # 更新表头显示排序指示器
+        header = self.model_table.horizontalHeader()
+        header.setSortIndicator(self.current_sort_column, self.current_sort_order)
+    
+    def sort_models_by_name(self):
+        """按模型名称排序"""
+        if self.current_sort_order == Qt.AscendingOrder:
+            self.models_data.sort(key=lambda x: x['name'].lower())
+        else:
+            self.models_data.sort(key=lambda x: x['name'].lower(), reverse=True)
+        self.update_table_from_data()
+    
+    def sort_models_by_tag(self):
+        """按Tag排序"""
+        if self.current_sort_order == Qt.AscendingOrder:
+            self.models_data.sort(key=lambda x: x['tag'].lower())
+        else:
+            self.models_data.sort(key=lambda x: x['tag'].lower(), reverse=True)
+        self.update_table_from_data()
+    
+    def sort_models_by_id(self):
+        """按ID排序"""
+        if self.current_sort_order == Qt.AscendingOrder:
+            self.models_data.sort(key=lambda x: x.get('id', '').lower())
+        else:
+            self.models_data.sort(key=lambda x: x.get('id', '').lower(), reverse=True)
+        self.update_table_from_data()
+    
+    def sort_models_by_size(self):
+        """按大小排序"""
+        if self.current_sort_order == Qt.AscendingOrder:
+            self.models_data.sort(key=lambda x: self.parse_size(x['size']))
+        else:
+            self.models_data.sort(key=lambda x: self.parse_size(x['size']), reverse=True)
+        self.update_table_from_data()
+    
+    def sort_models_by_date(self):
+        """按日期排序"""
+        if self.current_sort_order == Qt.AscendingOrder:
+            self.models_data.sort(key=lambda x: self.parse_date(x['modified_date']))
+        else:
+            self.models_data.sort(key=lambda x: self.parse_date(x['modified_date']), reverse=True)
+        self.update_table_from_data()
 
     def keyPressEvent(self, event):
         """处理键盘快捷键"""

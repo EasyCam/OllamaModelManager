@@ -1,3 +1,10 @@
+"""A graphical tool designed to export Ollama models to GGUF format and import GGUF files back into Ollama models. It provides an intuitive user interface for managing your Ollama models, supporting both Windows and Linux operating systems.
+"""
+import importlib.metadata
+import sys
+
+from PySide6 import QtWidgets
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -9,8 +16,9 @@ import subprocess
 from pathlib import Path
 from PySide6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                              QWidget, QPushButton, QListWidget, QLabel, QFileDialog, 
-                             QMessageBox, QProgressBar, QInputDialog, QMenuBar, QMenu)
-from PySide6.QtCore import Qt, QThread, Signal, QTranslator, QLocale
+                             QMessageBox, QProgressBar, QInputDialog, QMenuBar, QMenu,
+                             QTableWidget, QTableWidgetItem, QHeaderView, QComboBox, QLineEdit)
+from PySide6.QtCore import Qt, QThread, Signal, QTranslator, QLocale, QTimer
 from PySide6.QtGui import QAction
 
 class OllamaManager:
@@ -39,66 +47,140 @@ class OllamaManager:
         possible_paths = [
             "ollama",
             "C:\\Program Files\\Ollama\\ollama.exe",
-            "C:\\Users\\{}\\AppData\\Local\\Ollama\\ollama.exe".format(os.getenv('USERNAME')),
-            "/usr/local/bin/ollama",
+            "C:\\Users\\%USERNAME%\\AppData\\Local\\Ollama\\ollama.exe",
             "/usr/bin/ollama",
+            "/usr/local/bin/ollama"
         ]
         
+        # 尝试在PATH中查找
+        import shutil
+        ollama_path = shutil.which("ollama")
+        if ollama_path:
+            return ollama_path
+            
+        # 如果在PATH中找不到，则尝试常见路径
         for path in possible_paths:
+            # 在Windows上，替换%USERNAME%
+            if os.name == 'nt' and '%USERNAME%' in path:
+                import getpass
+                username = getpass.getuser()
+                path = path.replace('%USERNAME%', username)
+            
             if os.path.exists(path):
                 return path
-        
-        # 如果在常见路径中找不到，尝试在PATH中查找
-        try:
-            # 在Linux系统上使用 'which' 命令
-            if os.name == 'posix':
-                result = subprocess.run(["which", "ollama"], capture_output=True, text=True)
-            else:
-                result = subprocess.run(["where", "ollama"], capture_output=True, text=True, shell=True)
-            if result.returncode == 0:
-                return result.stdout.strip().split('\n')[0]
-        except:
-            pass
-        
+                
         return None
     
     def list_models(self):
-        """列出所有已下载的模型"""
-        if not self.ollama_path:
-            raise Exception(self.tr("Ollama executable not found"))
-        
+        """列出所有已下载的模型，返回详细的模型信息"""
         try:
             result = subprocess.run([self.ollama_path, "list"], 
-                                  capture_output=True, text=True, shell=True, encoding='utf-8', errors='ignore')
+                                  capture_output=True, text=True, shell=False, encoding='utf-8', timeout=10)
             if result.returncode != 0:
-                raise Exception(self.tr_with_args("Failed to get model list: %1", result.stderr))
+                raise Exception(f"Failed to list models: {result.stderr}")
             
+            # 解析输出，提取详细的模型信息
+            import re
             models = []
-            lines = result.stdout.strip().split('\n')[1:]  # 跳过标题行
-            
-            for line in lines:
-                if line.strip():
-                    parts = line.split()
-                    if parts:
-                        model_name = parts[0]
-                        models.append(model_name)
+            for line in result.stdout.split('\n'):
+                line = line.strip()
+                if not line or line.startswith('NAME'):  # 跳过标题行和空行
+                    continue
+                
+                # 使用正则表达式匹配 ollama list 的输出格式
+                # 格式: model_name:tag    ID    size    modified_date
+                # 例如: llama3.2:3b    a80c4f17acd5    2.0 GB    7 minutes ago
+                pattern = r'^([a-zA-Z0-9_./-]+):([a-zA-Z0-9_.-]+)\s+([a-f0-9]+)\s+([0-9.]+\s*[KMG]?B?)\s+(.+)$'
+                match = re.match(pattern, line)
+                
+                if match:
+                    # 匹配成功，提取各个字段
+                    model_name = match.group(1).strip()
+                    tag = match.group(2).strip()
+                    model_id = match.group(3).strip()
+                    size = match.group(4).strip()
+                    modified_date = match.group(5).strip()
+                    
+                    # 创建完整的模型标识符
+                    full_name = f"{model_name}:{tag}"
+                    
+                    models.append({
+                        'name': model_name,
+                        'tag': tag,
+                        'id': model_id,
+                        'full_name': full_name,
+                        'size': size,
+                        'modified_date': modified_date
+                    })
+                else:
+                    # 如果没有匹配到，尝试处理没有标签的模型
+                    # 格式: model_name    ID    size    modified_date
+                    pattern_no_tag = r'^([a-zA-Z0-9_./-]+)\s+([a-f0-9]+)\s+([0-9.]+[KMG]?B?)\s+(.+)$'
+                    match_no_tag = re.match(pattern_no_tag, line)
+                    
+                    if match_no_tag:
+                        model_name = match_no_tag.group(1).strip()
+                        model_id = match_no_tag.group(2).strip()
+                        size = match_no_tag.group(3).strip()
+                        modified_date = match_no_tag.group(4).strip()
+                        
+                        # 创建完整的模型标识符
+                        full_name = model_name
+                        
+                        models.append({
+                            'name': model_name,
+                            'tag': "",
+                            'id': model_id,
+                            'full_name': full_name,
+                            'size': size,
+                            'modified_date': modified_date
+                        })
+                    else:
+                        # 如果还是无法匹配，使用简单的分割方法
+                        parts = line.split()
+                        if len(parts) >= 4:
+                            # 检查第一个部分是否包含冒号（有标签）
+                            if ':' in parts[0]:
+                                name_parts = parts[0].split(':', 1)
+                                model_name = name_parts[0].strip()
+                                tag = name_parts[1].strip()
+                                full_name = f"{model_name}:{tag}"
+                            else:
+                                model_name = parts[0].strip()
+                                tag = ""
+                                full_name = model_name
+                            
+                            model_id = parts[1] if len(parts) > 1 else ""
+                            size = parts[2] if len(parts) > 2 else ""
+                            modified_date = " ".join(parts[3:]) if len(parts) > 3 else ""
+                            
+                            models.append({
+                                'name': model_name,
+                                'tag': tag,
+                                'id': model_id,
+                                'full_name': full_name,
+                                'size': size,
+                                'modified_date': modified_date
+                            })
             
             return models
+        except subprocess.TimeoutExpired:
+            raise Exception("Timeout while listing models")
         except Exception as e:
-            raise Exception(self.tr_with_args("Error listing models: %1", str(e)))
+            raise Exception(f"Error listing models: {str(e)}")
     
     def export_model(self, model_name, export_path):
         """导出模型到指定路径"""
         if not self.ollama_path:
-            raise Exception(self.tr("Ollama executable not found"))
+            raise Exception("Ollama executable not found")
         
         try:
             # 使用 ollama show --modelfile 命令获取模型文件内容
             cmd = [self.ollama_path, "show", "--modelfile", model_name]
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, encoding='utf-8', errors='ignore')
+            result = subprocess.run(cmd, capture_output=True, text=True, shell=False, encoding='utf-8')
             
             if result.returncode != 0:
-                raise Exception(self.tr_with_args("Failed to get model file: %1", result.stderr))
+                raise Exception(f"Failed to get model file: {result.stderr}")
             
             # 解析 Modelfile 内容找到实际的模型文件路径
             modelfile_content = result.stdout
@@ -111,7 +193,7 @@ class OllamaManager:
                     break
             
             if not model_file_path:
-                raise Exception(self.tr("Could not find model file path"))
+                raise Exception("Could not find model file path")
             
             # 如果模型文件路径是相对路径，则转换为绝对路径
             if model_file_path.startswith('~'):
@@ -124,7 +206,7 @@ class OllamaManager:
             
             # 检查模型文件是否存在
             if not os.path.exists(model_file_path):
-                raise Exception(self.tr_with_args("Model file does not exist: %1", model_file_path))
+                raise Exception(f"Model file does not exist: {model_file_path}")
             
             # 创建导出目录
             export_dir = os.path.dirname(export_path)
@@ -142,32 +224,32 @@ class OllamaManager:
             
             return True
         except Exception as e:
-            raise Exception(self.tr_with_args("Error exporting model: %1", str(e)))
+            raise Exception(f"Error exporting model: {str(e)}")
     
     def import_model(self, import_path, new_model_name=None):
         """从指定路径导入模型"""
         if not self.ollama_path:
-            raise Exception(self.tr("Ollama executable not found"))
+            raise Exception("Ollama executable not found")
         
         # 检查Ollama服务是否运行
         try:
             result = subprocess.run([self.ollama_path, "list"], 
-                                  capture_output=True, text=True, shell=True, encoding='utf-8', errors='ignore', timeout=10)
+                                  capture_output=True, text=True, shell=False, encoding='utf-8', timeout=10)
             if result.returncode != 0:
-                raise Exception(self.tr("Ollama service is not running. Please start Ollama first."))
+                raise Exception("Ollama service is not running. Please start Ollama first.")
         except subprocess.TimeoutExpired:
-            raise Exception(self.tr("Ollama service is not responding. Please start Ollama first."))
+            raise Exception("Ollama service is not responding. Please start Ollama first.")
         except Exception as e:
-            raise Exception(self.tr_with_args("Failed to connect to Ollama service: %1", str(e)))
+            raise Exception(f"Failed to connect to Ollama service: {str(e)}")
         
         try:
             # 检查文件是否存在
             if not os.path.exists(import_path):
-                raise Exception(self.tr_with_args("File does not exist: %1", import_path))
+                raise Exception(f"File does not exist: {import_path}")
             
             # 检查文件是否为GGUF格式
             if not import_path.lower().endswith('.gguf'):
-                raise Exception(self.tr("File must be in GGUF format"))
+                raise Exception("File must be in GGUF format")
             
             # 获取文件的绝对路径
             import_path = os.path.abspath(import_path)
@@ -179,7 +261,7 @@ class OllamaManager:
             # 验证模型名是否有效（不能包含特殊字符）
             import re
             if not re.match(r'^[a-zA-Z0-9_-]+$', new_model_name):
-                raise Exception(self.tr("Model name can only contain letters, numbers, underscores, and hyphens"))
+                raise Exception("Model name can only contain letters, numbers, underscores, and hyphens")
             
             # 检查是否存在对应的Modelfile
             modelfile_path = os.path.splitext(import_path)[0] + ".modelfile"
@@ -211,11 +293,11 @@ class OllamaManager:
             try:
                 # 使用ollama create命令创建模型
                 cmd = [self.ollama_path, "create", new_model_name, "-f", temp_modelfile]
-                result = subprocess.run(cmd, capture_output=True, text=True, shell=True, encoding='utf-8', errors='ignore')
+                result = subprocess.run(cmd, capture_output=True, text=True, shell=False, encoding='utf-8')
                 
                 if result.returncode != 0:
                     error_msg = result.stderr.strip() if result.stderr else result.stdout.strip()
-                    raise Exception(self.tr_with_args("Failed to import model: %1", error_msg))
+                    raise Exception(f"Failed to import model: {error_msg}")
                 
                 return True
             finally:
@@ -227,7 +309,7 @@ class OllamaManager:
                         pass
                         
         except Exception as e:
-            raise Exception(self.tr_with_args("Error importing model: %1", str(e)))
+            raise Exception(f"Error importing model: {str(e)}")
     
     def create_modelfile_content(self, import_path, model_name):
         """根据模型类型创建相应的Modelfile内容"""
@@ -268,16 +350,23 @@ PARAMETER repeat_penalty 1.1
 SYSTEM "You are Qwen, a helpful AI assistant. You provide accurate, helpful, and safe responses to user queries."
 
 # Qwen模板
-TEMPLATE "{{ if .System }}<|im_start|>system
-{{ .System }}<|im_end|>
-{{ end }}{{ if .Prompt }}<|im_start|>user
-{{ .Prompt }}<|im_end|>
-{{ end }}<|im_start|>assistant
-{{ .Response }}<|im_end|>"
+TEMPLATE "{{ if .System }}<|system|>
+{{ .System }}
+<|end|>
+
+{{ end }}{{ if .Prompt }}<|user|>
+{{ .Prompt }}
+<|end|>
+
+{{ end }}<|assistant|>
+{{ .Response }}
+<|end|>"
 
 # 停止标记
-STOP "<|im_start|>"
-STOP "<|im_end|>"
+STOP "<|system|>"
+STOP "<|user|>"
+STOP "<|assistant|>"
+STOP "<|end|>"
 """
     
     def create_llama_modelfile(self, import_path, model_name):
@@ -402,16 +491,23 @@ PARAMETER repeat_penalty 1.1
 SYSTEM "You are a helpful AI assistant. You provide accurate, helpful, and safe responses to user queries."
 
 # Yi模板
-TEMPLATE "{{ if .System }}<|im_start|>system
-{{ .System }}<|im_end|>
-{{ end }}{{ if .Prompt }}<|im_start|>user
-{{ .Prompt }}<|im_end|>
-{{ end }}<|im_start|>assistant
-{{ .Response }}<|im_end|>"
+TEMPLATE "{{ if .System }}<|system|>
+{{ .System }}
+<|end|>
+
+{{ end }}{{ if .Prompt }}<|user|>
+{{ .Prompt }}
+<|end|>
+
+{{ end }}<|assistant|>
+{{ .Response }}
+<|end|>"
 
 # 停止标记
-STOP "<|im_start|>"
-STOP "<|im_end|>"
+STOP "<|system|>"
+STOP "<|user|>"
+STOP "<|assistant|>"
+STOP "<|end|>"
 """
     
     def create_deepseek_modelfile(self, import_path, model_name):
@@ -428,16 +524,23 @@ PARAMETER repeat_penalty 1.1
 SYSTEM "You are a helpful AI assistant. You provide accurate, helpful, and safe responses to user queries."
 
 # DeepSeek模板
-TEMPLATE "{{ if .System }}<|im_start|>system
-{{ .System }}<|im_end|>
-{{ end }}{{ if .Prompt }}<|im_start|>user
-{{ .Prompt }}<|im_end|>
-{{ end }}<|im_start|>assistant
-{{ .Response }}<|im_end|>"
+TEMPLATE "{{ if .System }}<|system|>
+{{ .System }}
+<|end|>
+
+{{ end }}{{ if .Prompt }}<|user|>
+{{ .Prompt }}
+<|end|>
+
+{{ end }}<|assistant|>
+{{ .Response }}
+<|end|>"
 
 # 停止标记
-STOP "<|im_start|>"
-STOP "<|im_end|>"
+STOP "<|system|>"
+STOP "<|user|>"
+STOP "<|assistant|>"
+STOP "<|end|>"
 """
     
     def create_codellama_modelfile(self, import_path, model_name):
@@ -479,17 +582,76 @@ PARAMETER repeat_penalty 1.1
 SYSTEM "You are a helpful AI assistant. You provide accurate, helpful, and safe responses to user queries."
 
 # 通用模板
-TEMPLATE "{{ if .System }}<|im_start|>system
-{{ .System }}<|im_end|>
-{{ end }}{{ if .Prompt }}<|im_start|>user
-{{ .Prompt }}<|im_end|>
-{{ end }}<|im_start|>assistant
-{{ .Response }}<|im_end|>"
+TEMPLATE "{{ if .System }}<|system|>
+{{ .System }}
+<|end|>
+
+{{ end }}{{ if .Prompt }}<|user|>
+{{ .Prompt }}
+<|end|>
+
+{{ end }}<|assistant|>
+{{ .Response }}
+<|end|>"
 
 # 停止标记
-STOP "<|im_start|>"
-STOP "<|im_end|>"
+STOP "<|system|>"
+STOP "<|user|>"
+STOP "<|assistant|>"
+STOP "<|end|>"
 """
+
+    def delete_model(self, model_name):
+        """删除指定的模型"""
+        if not self.ollama_path:
+            raise Exception("Ollama executable not found")
+        
+        try:
+            # 检查Ollama服务是否运行
+            result = subprocess.run([self.ollama_path, "list"], 
+                                  capture_output=True, text=True, shell=False, encoding='utf-8', timeout=10)
+            if result.returncode != 0:
+                raise Exception("Ollama service is not running. Please start Ollama first.")
+            
+            # 使用 ollama rm 命令删除模型
+            cmd = [self.ollama_path, "rm", model_name]
+            result = subprocess.run(cmd, capture_output=True, text=True, shell=False, encoding='utf-8', timeout=30)
+            
+            if result.returncode != 0:
+                error_msg = result.stderr.strip() if result.stderr else result.stdout.strip()
+                raise Exception(f"Failed to delete model: {error_msg}")
+            
+            return True
+        except subprocess.TimeoutExpired:
+            raise Exception("Timeout while deleting model")
+        except Exception as e:
+            raise Exception(f"Error deleting model: {str(e)}")
+    
+    def update_model(self, model_name):
+        """更新指定模型"""
+        if not self.ollama_path:
+            raise Exception("Ollama executable not found")
+        
+        try:
+            # 检查Ollama服务是否运行
+            result = subprocess.run([self.ollama_path, "list"], 
+                                  capture_output=True, text=True, shell=False, encoding='utf-8', timeout=10)
+            if result.returncode != 0:
+                raise Exception("Ollama service is not running. Please start Ollama first.")
+            
+            # 使用 ollama pull 命令更新模型
+            cmd = [self.ollama_path, "pull", model_name]
+            result = subprocess.run(cmd, capture_output=True, text=True, shell=False, encoding='utf-8', timeout=300)  # 5分钟超时
+            
+            if result.returncode != 0:
+                error_msg = result.stderr.strip() if result.stderr else result.stdout.strip()
+                raise Exception(f"Failed to update model: {error_msg}")
+                
+            return True
+        except subprocess.TimeoutExpired:
+            raise Exception("Timeout while updating model")
+        except Exception as e:
+            raise Exception(f"Error updating model: {str(e)}")
 
 
 class WorkerThread(QThread):
@@ -501,36 +663,58 @@ class WorkerThread(QThread):
         super().__init__()
         self.operation = operation
         self.args = args
+        self._is_cancelled = False
+    
+    def cancel(self):
+        """取消操作"""
+        self._is_cancelled = True
     
     def run(self):
         try:
+            if self._is_cancelled:
+                return
+                
             if self.operation == "list":
                 manager = OllamaManager()
                 models = manager.list_models()
-                self.finished.emit(True, json.dumps(models))
+                if not self._is_cancelled:
+                    self.finished.emit(True, json.dumps(models))
             elif self.operation == "export":
                 manager = OllamaManager()
                 model_name, export_path = self.args
                 manager.export_model(model_name, export_path)
-                modelfile_path = os.path.splitext(export_path)[0] + ".modelfile"
-                message = manager.tr_with_args("Model %1 successfully exported to %2 and Modelfile to %3", model_name, export_path, modelfile_path)
-                self.finished.emit(True, message)
+                if not self._is_cancelled:
+                    modelfile_path = os.path.splitext(export_path)[0] + ".modelfile"
+                    message = f"Model {model_name} successfully exported to {export_path} and Modelfile to {modelfile_path}"
+                    self.finished.emit(True, message)
             elif self.operation == "import":
                 manager = OllamaManager()
-                import_path = self.args[0]
-                new_model_name = self.args[1] if len(self.args) > 1 else None
+                import_path, new_model_name = self.args
                 manager.import_model(import_path, new_model_name)
                 
-                # 检查是否使用了现有的Modelfile
-                modelfile_path = os.path.splitext(import_path)[0] + ".modelfile"
-                if os.path.exists(modelfile_path):
-                    message = manager.tr_with_args("Model successfully imported from %1 using existing Modelfile", import_path)
-                else:
-                    message = manager.tr_with_args("Model successfully imported from %1 using default configuration", import_path)
-                
-                self.finished.emit(True, message)
+                if not self._is_cancelled:
+                    message = f"Model successfully imported from {import_path} with name {new_model_name}"
+                    self.finished.emit(True, message)
+            elif self.operation == "delete":
+                manager = OllamaManager()
+                model_name = self.args[0]
+                manager.delete_model(model_name)
+                if not self._is_cancelled:
+                    message = f"Model {model_name} successfully deleted"
+                    self.finished.emit(True, message)
+            elif self.operation == "update":
+                manager = OllamaManager()
+                model_name = self.args[0]
+                manager.update_model(model_name)
+                if not self._is_cancelled:
+                    message = f"Model {model_name} successfully updated"
+                    self.finished.emit(True, message)
         except Exception as e:
-            self.finished.emit(False, str(e))
+            if not self._is_cancelled:
+                self.finished.emit(False, str(e))
+        finally:
+            # Ensure thread is properly cleaned up
+            self._is_cancelled = True
 
 
 class MainWindow(QMainWindow):
@@ -550,11 +734,11 @@ class MainWindow(QMainWindow):
         # 尝试加载翻译文件
         if locale.startswith('zh'):
             # 加载中文翻译
-            # 假设翻译文件在当前目录的translations文件夹中
+            # 注意：这里需要有实际的翻译文件
             self.translator.load("translations/omm_zh.qm")
         else:
             # 加载英文翻译
-            # 假设翻译文件在当前目录的translations文件夹中
+            # 注意：这里需要有实际的翻译文件
             self.translator.load("translations/omm_en.qm")
         
         # 安装翻译器
@@ -569,7 +753,22 @@ class MainWindow(QMainWindow):
         self.worker_thread = None
         
         self.init_ui()
-        self.load_models()
+        
+        # Use a timer to delay the initial model loading
+        QTimer.singleShot(500, self.load_models)
+    
+    def closeEvent(self, event):
+        """窗口关闭事件，确保线程正确清理"""
+        if self.worker_thread and self.worker_thread.isRunning():
+            try:
+                self.worker_thread.finished.disconnect()
+            except:
+                pass
+            self.worker_thread.quit()
+            if not self.worker_thread.wait(3000):  # 等待最多3秒
+                self.worker_thread.terminate()
+                self.worker_thread.wait(1000)
+        event.accept()
     
     def init_ui(self):
         """初始化用户界面"""
@@ -591,10 +790,75 @@ class MainWindow(QMainWindow):
         title_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(title_label)
         
-        # 模型列表
+        # 排序控件
+        sort_layout = QHBoxLayout()
+        sort_layout.addWidget(QLabel(self.tr("Sort by:")))
+        
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItems([
+            self.tr("Name (A-Z)"),
+            self.tr("Name (Z-A)"),
+            self.tr("Size (Largest First)"),
+            self.tr("Size (Smallest First)"),
+            self.tr("Date (Newest First)"),
+            self.tr("Date (Oldest First)")
+        ])
+        self.sort_combo.currentIndexChanged.connect(self.sort_models)
+        sort_layout.addWidget(self.sort_combo)
+        
+        sort_layout.addStretch()
+        
+        # 搜索控件
+        sort_layout.addWidget(QLabel(self.tr("Search:")))
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText(self.tr("Enter model name to search..."))
+        self.search_input.textChanged.connect(self.filter_models)
+        sort_layout.addWidget(self.search_input)
+        
+        # 清除搜索按钮
+        self.clear_search_button = QPushButton(self.tr("Clear"))
+        self.clear_search_button.clicked.connect(self.clear_search)
+        self.clear_search_button.setMaximumWidth(60)
+        sort_layout.addWidget(self.clear_search_button)
+        
+        layout.addLayout(sort_layout)
+        
+        # 模型表格
         layout.addWidget(QLabel(self.tr("Downloaded Models:")))
-        self.model_list = QListWidget()
-        layout.addWidget(self.model_list)
+        self.model_table = QTableWidget()
+        self.model_table.setColumnCount(5)
+        self.model_table.setHorizontalHeaderLabels([
+            self.tr("Model Name"),
+            self.tr("Tag"),
+            self.tr("ID"),
+            self.tr("Size"),
+            self.tr("Modified Date")
+        ])
+        
+        # 设置表格属性
+        self.model_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.model_table.setSelectionMode(QTableWidget.SingleSelection)
+        self.model_table.setAlternatingRowColors(True)
+        self.model_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.model_table.customContextMenuRequested.connect(self.show_context_menu)
+        
+        # 设置列宽
+        header = self.model_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)  # 模型名称列自适应
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Tag列自适应内容
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # ID列自适应内容
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # 大小列自适应内容
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # 日期列自适应内容
+        
+        # 启用表头点击排序
+        header.setSectionsClickable(True)
+        header.sectionClicked.connect(self.on_header_clicked)
+        
+        # 存储当前排序状态
+        self.current_sort_column = -1
+        self.current_sort_order = Qt.AscendingOrder
+        
+        layout.addWidget(self.model_table)
         
         # 按钮布局
         button_layout = QHBoxLayout()
@@ -610,6 +874,14 @@ class MainWindow(QMainWindow):
         self.import_button = QPushButton(self.tr("Import Model"))
         self.import_button.clicked.connect(self.import_model)
         button_layout.addWidget(self.import_button)
+
+        self.delete_button = QPushButton(self.tr("Delete Selected Model"))
+        self.delete_button.clicked.connect(self.delete_model)
+        button_layout.addWidget(self.delete_button)
+        
+        self.update_button = QPushButton(self.tr("Update Selected Model"))
+        self.update_button.clicked.connect(self.update_model)
+        button_layout.addWidget(self.update_button)
         
         layout.addLayout(button_layout)
         
@@ -622,9 +894,28 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel(self.tr("Ready"))
         self.status_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.status_label)
+        
+        # 状态栏
+        self.statusBar = self.statusBar()
+        self.statusBar.showMessage(self.tr("Ready - Press F5 to refresh, Ctrl+F to search"))
+        
+        # 存储模型数据
+        self.models_data = []
+        self.original_models_data = []  # 存储原始数据用于搜索
     
     def load_models(self):
         """加载模型列表"""
+        # 如果已有线程在运行，先清理
+        if self.worker_thread and self.worker_thread.isRunning():
+            try:
+                self.worker_thread.finished.disconnect()
+            except:
+                pass
+            self.worker_thread.quit()
+            if not self.worker_thread.wait(1000):
+                self.worker_thread.terminate()
+                self.worker_thread.wait(500)
+        
         self.status_label.setText(self.tr("Loading model list..."))
         self.progress_bar.setVisible(True)
         
@@ -638,34 +929,51 @@ class MainWindow(QMainWindow):
         
         if success:
             models = json.loads(data)
-            self.model_list.clear()
+            self.models_data = models  # 存储模型数据用于排序
+            self.original_models_data = models # 存储原始数据用于搜索
+            self.model_table.setRowCount(0)  # 清空现有行
             for model in models:
-                self.model_list.addItem(model)
+                self.add_model_to_table(model)
             self.status_label.setText(self.tr("Loaded %n models", "", len(models)))
+            self.statusBar.showMessage(self.tr("Ready - %n models loaded. Press F5 to refresh, Ctrl+F to search").replace("%n", str(len(models))))
         else:
             QMessageBox.critical(self, self.tr("Error"), self.tr("Failed to load model list: %1").replace("%1", data))
             self.status_label.setText(self.tr("Failed to load model list"))
+            self.statusBar.showMessage(self.tr("Error loading models"))
     
     def export_model(self):
         """导出选中的模型"""
-        selected_items = self.model_list.selectedItems()
+        selected_items = self.model_table.selectedItems()
         if not selected_items:
             QMessageBox.warning(self, self.tr("Warning"), self.tr("Please select a model first"))
             return
         
-        model_name = selected_items[0].text()
+        # 获取选中行的模型完整名称
+        row = selected_items[0].row()
+        model_full_name = self.model_table.item(row, 0).data(Qt.UserRole)
         
         # 选择导出路径
         export_path, _ = QFileDialog.getSaveFileName(
-            self, self.tr("Select Export Path"), f"{model_name}.gguf", self.tr("GGUF Files (*.gguf);;All Files (*)"))
+            self, self.tr("Select Export Path"), f"{model_full_name}.gguf", self.tr("GGUF Files (*.gguf);;All Files (*)"))
         
         if not export_path:
             return
         
-        self.status_label.setText(self.tr("Exporting model %1...").replace("%1", model_name))
+        # 如果已有线程在运行，先清理
+        if self.worker_thread and self.worker_thread.isRunning():
+            try:
+                self.worker_thread.finished.disconnect()
+            except:
+                pass
+            self.worker_thread.quit()
+            if not self.worker_thread.wait(1000):
+                self.worker_thread.terminate()
+                self.worker_thread.wait(500)
+        
+        self.status_label.setText(self.tr("Exporting model %1...").replace("%1", model_full_name))
         self.progress_bar.setVisible(True)
         
-        self.worker_thread = WorkerThread("export", model_name, export_path)
+        self.worker_thread = WorkerThread("export", model_full_name, export_path)
         self.worker_thread.finished.connect(self.on_export_finished)
         self.worker_thread.start()
     
@@ -730,6 +1038,17 @@ class MainWindow(QMainWindow):
                               self.tr("Model name can only contain letters, numbers, underscores, and hyphens"))
             return
         
+        # 如果已有线程在运行，先清理
+        if self.worker_thread and self.worker_thread.isRunning():
+            try:
+                self.worker_thread.finished.disconnect()
+            except:
+                pass
+            self.worker_thread.quit()
+            if not self.worker_thread.wait(1000):
+                self.worker_thread.terminate()
+                self.worker_thread.wait(500)
+        
         self.status_label.setText(self.tr("Importing model %1...").replace("%1", new_model_name))
         self.progress_bar.setVisible(True)
         
@@ -750,6 +1069,83 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, self.tr("Error"), self.tr("Import failed: %1").replace("%1", message))
             self.status_label.setText(self.tr("Model import failed"))
     
+
+    def delete_model(self):
+        """删除选中的模型"""
+        selected_items = self.model_table.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, self.tr("Warning"), self.tr("Please select a model first"))
+            return
+        
+        # 获取选中行的模型完整名称
+        row = selected_items[0].row()
+        model_full_name = self.model_table.item(row, 0).data(Qt.UserRole)
+        
+        reply = QMessageBox.question(
+            self, self.tr("Confirm Deletion"),
+            self.tr("Are you sure you want to delete the model \"%1\"?").replace("%1", model_full_name),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            # 如果已有线程在运行，先清理
+            if self.worker_thread and self.worker_thread.isRunning():
+                try:
+                    self.worker_thread.finished.disconnect()
+                except:
+                    pass
+                self.worker_thread.quit()
+                if not self.worker_thread.wait(1000):
+                    self.worker_thread.terminate()
+                    self.worker_thread.wait(500)
+            
+            self.status_label.setText(self.tr("Deleting model %1...").replace("%1", model_full_name))
+            self.progress_bar.setVisible(True)
+            
+            self.worker_thread = WorkerThread("delete", model_full_name)
+            self.worker_thread.finished.connect(self.on_delete_finished)
+            self.worker_thread.start()
+        else:
+            self.status_label.setText(self.tr("Model deletion cancelled"))
+
+    def update_model(self):
+        """更新选中的模型"""
+        selected_items = self.model_table.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, self.tr("Warning"), self.tr("Please select a model first"))
+            return
+        
+        # 获取选中行的模型完整名称
+        row = selected_items[0].row()
+        model_full_name = self.model_table.item(row, 0).data(Qt.UserRole)
+        
+        reply = QMessageBox.question(
+            self, self.tr("Confirm Update"),
+            self.tr("Are you sure you want to update the model \"%1\"? This may take a while.").replace("%1", model_full_name),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            # 如果已有线程在运行，先清理
+            if self.worker_thread and self.worker_thread.isRunning():
+                try:
+                    self.worker_thread.finished.disconnect()
+                except:
+                    pass
+                self.worker_thread.quit()
+                if not self.worker_thread.wait(1000):
+                    self.worker_thread.terminate()
+                    self.worker_thread.wait(500)
+            
+            self.status_label.setText(self.tr("Updating model %1...").replace("%1", model_full_name))
+            self.progress_bar.setVisible(True)
+            
+            self.worker_thread = WorkerThread("update", model_full_name)
+            self.worker_thread.finished.connect(self.on_update_finished)
+            self.worker_thread.start()
+        else:
+            self.status_label.setText(self.tr("Model update cancelled"))
+
     def create_menu_bar(self):
         """创建菜单栏"""
         menu_bar = self.menuBar()
@@ -805,26 +1201,496 @@ class MainWindow(QMainWindow):
         #                       self.tr("Language switched to %1. Changes will be applied immediately.").replace("%1", language_code))
         self.load_models()
 
+    def parse_size(self, size_str):
+        """解析大小字符串，返回字节数用于排序"""
+        if not size_str:
+            return 0
+        
+        size_str = size_str.strip().upper()
+        try:
+            if size_str.endswith('B'):
+                size_str = size_str[:-1]
+            
+            if size_str.endswith('K'):
+                return int(float(size_str[:-1]) * 1024)
+            elif size_str.endswith('M'):
+                return int(float(size_str[:-1]) * 1024 * 1024)
+            elif size_str.endswith('G'):
+                return int(float(size_str[:-1]) * 1024 * 1024 * 1024)
+            else:
+                return int(float(size_str))
+        except:
+            return 0
+    
+    def parse_date(self, date_str):
+        """解析日期字符串，返回时间戳用于排序"""
+        if not date_str:
+            return 0
+        
+        try:
+            from datetime import datetime
+            # 尝试解析常见的日期格式
+            formats = [
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%d %H:%M",
+                "%Y-%m-%d",
+                "%m/%d/%Y %H:%M:%S",
+                "%m/%d/%Y %H:%M",
+                "%m/%d/%Y"
+            ]
+            
+            for fmt in formats:
+                try:
+                    return datetime.strptime(date_str.strip(), fmt).timestamp()
+                except:
+                    continue
+            
+            # 如果所有格式都失败，返回0
+            return 0
+        except:
+            return 0
+
+    def sort_models(self):
+        """根据选择的排序方式对模型列表进行排序"""
+        sort_by = self.sort_combo.currentText()
+        
+        if sort_by == self.tr("Name (A-Z)"):
+            self.models_data.sort(key=lambda x: x['name'].lower())
+        elif sort_by == self.tr("Name (Z-A)"):
+            self.models_data.sort(key=lambda x: x['name'].lower(), reverse=True)
+        elif sort_by == self.tr("Size (Largest First)"):
+            self.models_data.sort(key=lambda x: self.parse_size(x['size']), reverse=True)
+        elif sort_by == self.tr("Size (Smallest First)"):
+            self.models_data.sort(key=lambda x: self.parse_size(x['size']))
+        elif sort_by == self.tr("Date (Newest First)"):
+            self.models_data.sort(key=lambda x: self.parse_date(x['modified_date']), reverse=True)
+        elif sort_by == self.tr("Date (Oldest First)"):
+            self.models_data.sort(key=lambda x: self.parse_date(x['modified_date']))
+        
+        self.update_table_from_data()
+
+    def filter_models(self):
+        """根据搜索框内容过滤模型列表"""
+        search_text = self.search_input.text().lower()
+        
+        # 从原始数据中过滤
+        filtered_data = [
+            model for model in self.original_models_data
+            if search_text in model['name'].lower() or search_text in model['tag'].lower()
+        ]
+        
+        # 应用当前排序
+        self.models_data = filtered_data
+        self.sort_models()
+
+    def clear_search(self):
+        """清除搜索框内容"""
+        self.search_input.clear()
+        self.filter_models() # 重新应用当前排序
+
+    def update_table_from_data(self):
+        """根据存储的模型数据更新表格"""
+        self.model_table.setRowCount(0) # 清空现有行
+        for model in self.models_data:
+            self.add_model_to_table(model)
+
+    def add_model_to_table(self, model):
+        """将单个模型数据添加到表格中"""
+        row_position = self.model_table.rowCount()
+        self.model_table.insertRow(row_position)
+        
+        # 模型名称
+        model_name_item = QTableWidgetItem(model['name'])
+        model_name_item.setData(Qt.UserRole, model['full_name']) # 存储完整名称
+        self.model_table.setItem(row_position, 0, model_name_item)
+        
+        # 模型标签
+        tag_item = QTableWidgetItem(model['tag'])
+        self.model_table.setItem(row_position, 1, tag_item)
+        
+        # 模型ID
+        id_item = QTableWidgetItem(model.get('id', ''))
+        self.model_table.setItem(row_position, 2, id_item)
+        
+        # 模型大小
+        size_item = QTableWidgetItem(model['size'])
+        self.model_table.setItem(row_position, 3, size_item)
+        
+        # 模型修改日期
+        date_item = QTableWidgetItem(model['modified_date'])
+        self.model_table.setItem(row_position, 4, date_item)
+
+    def on_delete_finished(self, success, message):
+        """删除完成的回调"""
+        self.progress_bar.setVisible(False)
+        
+        if success:
+            QMessageBox.information(self, self.tr("Success"), message)
+            self.status_label.setText(self.tr("Model deleted successfully"))
+            # 重新加载模型列表
+            self.load_models()
+        else:
+            QMessageBox.critical(self, self.tr("Error"), self.tr("Delete failed: %1").replace("%1", message))
+            self.status_label.setText(self.tr("Model deletion failed"))
+
+    def on_update_finished(self, success, message):
+        """更新完成的回调"""
+        self.progress_bar.setVisible(False)
+        
+        if success:
+            QMessageBox.information(self, self.tr("Success"), message)
+            self.status_label.setText(self.tr("Model updated successfully"))
+            self.load_models()
+        else:
+            QMessageBox.critical(self, self.tr("Error"), self.tr("Update failed: %1").replace("%1", message))
+            self.status_label.setText(self.tr("Model update failed"))
+
+    def show_context_menu(self, position):
+        """显示右键菜单"""
+        selected_items = self.model_table.selectedItems()
+        if not selected_items:
+            return
+
+        menu = QMenu(self)
+
+        # 获取选中行的模型完整名称
+        row = selected_items[0].row()
+        model_full_name = self.model_table.item(row, 0).data(Qt.UserRole)
+
+        # 添加导出选项
+        export_action = menu.addAction(self.tr("Export Selected Model"))
+        export_action.triggered.connect(lambda: self.export_model_context_menu(model_full_name))
+
+        # 添加导入选项
+        import_action = menu.addAction(self.tr("Import Model"))
+        import_action.triggered.connect(lambda: self.import_model_context_menu(model_full_name))
+
+        # 添加删除选项
+        delete_action = menu.addAction(self.tr("Delete Selected Model"))
+        delete_action.triggered.connect(lambda: self.delete_model_context_menu(model_full_name))
+
+        # 添加更新选项
+        update_action = menu.addAction(self.tr("Update Selected Model"))
+        update_action.triggered.connect(lambda: self.update_model_context_menu(model_full_name))
+
+        menu.exec(self.model_table.mapToGlobal(position))
+
+    def export_model_context_menu(self, model_full_name):
+        """从右键菜单导出模型"""
+        export_path, _ = QFileDialog.getSaveFileName(
+            self, self.tr("Select Export Path"), f"{model_full_name}.gguf", self.tr("GGUF Files (*.gguf);;All Files (*)"))
+        
+        if not export_path:
+            return
+        
+        # 如果已有线程在运行，先清理
+        if self.worker_thread and self.worker_thread.isRunning():
+            try:
+                self.worker_thread.finished.disconnect()
+            except:
+                pass
+            self.worker_thread.quit()
+            if not self.worker_thread.wait(1000):
+                self.worker_thread.terminate()
+                self.worker_thread.wait(500)
+        
+        self.status_label.setText(self.tr("Exporting model %1...").replace("%1", model_full_name))
+        self.progress_bar.setVisible(True)
+        
+        self.worker_thread = WorkerThread("export", model_full_name, export_path)
+        self.worker_thread.finished.connect(self.on_export_finished)
+        self.worker_thread.start()
+
+    def import_model_context_menu(self, model_full_name):
+        """从右键菜单导入模型"""
+        # 选择导入文件
+        import_path, _ = QFileDialog.getOpenFileName(
+            self, self.tr("Select Model File to Import"), "", self.tr("GGUF Files (*.gguf);;All Files (*)"))
+        
+        if not import_path:
+            return
+        
+        # 获取文件名作为模型名
+        model_name = Path(import_path).stem
+        
+        # 验证文件名是否包含特殊字符
+        import re
+        if not re.match(r'^[a-zA-Z0-9_-]+$', model_name):
+            # 如果文件名包含特殊字符，提示用户输入新的模型名
+            new_model_name, ok = QInputDialog.getText(
+                self, self.tr("Model Name"), 
+                self.tr("The file name contains special characters. Please enter a valid model name:"), 
+                text=model_name.replace(re.sub(r'[^a-zA-Z0-9_-]', '', model_name), ''))
+            
+            if not ok:
+                self.status_label.setText(self.tr("Import operation cancelled"))
+                return
+            
+            if not new_model_name:
+                QMessageBox.warning(self, self.tr("Warning"), self.tr("Model name cannot be empty"))
+                return
+        else:
+            # 询问是否需要修改模型名
+            new_model_name, ok = QInputDialog.getText(
+                self, self.tr("Model Name"), 
+                self.tr("Please enter model name (optional):"), 
+                text=model_name)
+            
+            # 如果用户取消输入对话框，返回
+            if not ok:
+                self.status_label.setText(self.tr("Import operation cancelled"))
+                return
+            
+            # 如果用户没有输入新名称，使用默认名称
+            if not new_model_name:
+                new_model_name = model_name
+        
+        # 验证模型名是否有效
+        if not re.match(r'^[a-zA-Z0-9_-]+$', new_model_name):
+            QMessageBox.warning(self, self.tr("Warning"), 
+                              self.tr("Model name can only contain letters, numbers, underscores, and hyphens"))
+            return
+        
+        # 如果已有线程在运行，先清理
+        if self.worker_thread and self.worker_thread.isRunning():
+            try:
+                self.worker_thread.finished.disconnect()
+            except:
+                pass
+            self.worker_thread.quit()
+            if not self.worker_thread.wait(1000):
+                self.worker_thread.terminate()
+                self.worker_thread.wait(500)
+        
+        self.status_label.setText(self.tr("Importing model %1...").replace("%1", new_model_name))
+        self.progress_bar.setVisible(True)
+        
+        self.worker_thread = WorkerThread("import", import_path, new_model_name)
+        self.worker_thread.finished.connect(self.on_import_finished)
+        self.worker_thread.start()
+
+    def delete_model_context_menu(self, model_full_name):
+        """从右键菜单删除模型"""
+        reply = QMessageBox.question(
+            self, self.tr("Confirm Deletion"),
+            self.tr("Are you sure you want to delete the model \"%1\"?").replace("%1", model_full_name),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            # 如果已有线程在运行，先清理
+            if self.worker_thread and self.worker_thread.isRunning():
+                try:
+                    self.worker_thread.finished.disconnect()
+                except:
+                    pass
+                self.worker_thread.quit()
+                if not self.worker_thread.wait(1000):
+                    self.worker_thread.terminate()
+                    self.worker_thread.wait(500)
+            
+            self.status_label.setText(self.tr("Deleting model %1...").replace("%1", model_full_name))
+            self.progress_bar.setVisible(True)
+            
+            self.worker_thread = WorkerThread("delete", model_full_name)
+            self.worker_thread.finished.connect(self.on_delete_finished)
+            self.worker_thread.start()
+        else:
+            self.status_label.setText(self.tr("Model deletion cancelled"))
+
+    def update_model_context_menu(self, model_full_name):
+        """从右键菜单更新模型"""
+        reply = QMessageBox.question(
+            self, self.tr("Confirm Update"),
+            self.tr("Are you sure you want to update the model \"%1\"? This may take a while.").replace("%1", model_full_name),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            # 如果已有线程在运行，先清理
+            if self.worker_thread and self.worker_thread.isRunning():
+                try:
+                    self.worker_thread.finished.disconnect()
+                except:
+                    pass
+                self.worker_thread.quit()
+                if not self.worker_thread.wait(1000):
+                    self.worker_thread.terminate()
+                    self.worker_thread.wait(500)
+            
+            self.status_label.setText(self.tr("Updating model %1...").replace("%1", model_full_name))
+            self.progress_bar.setVisible(True)
+            
+            self.worker_thread = WorkerThread("update", model_full_name)
+            self.worker_thread.finished.connect(self.on_update_finished)
+            self.worker_thread.start()
+        else:
+            self.status_label.setText(self.tr("Model update cancelled"))
+
+    def on_header_clicked(self, logical_index):
+        """表头点击事件处理"""
+        if logical_index == self.current_sort_column:
+            # 如果点击的是当前排序列，则切换排序顺序
+            self.current_sort_order = Qt.DescendingOrder if self.current_sort_order == Qt.AscendingOrder else Qt.AscendingOrder
+        else:
+            # 如果点击的是新列，则设置为升序
+            self.current_sort_column = logical_index
+            self.current_sort_order = Qt.AscendingOrder
+        
+        # 根据列索引执行相应的排序
+        if logical_index == 0:  # 模型名称列
+            self.sort_models_by_name()
+        elif logical_index == 1:  # Tag列
+            self.sort_models_by_tag()
+        elif logical_index == 2:  # ID列
+            self.sort_models_by_id()
+        elif logical_index == 3:  # 大小列
+            self.sort_models_by_size()
+        elif logical_index == 4:  # 日期列
+            self.sort_models_by_date()
+        
+        # 更新表头显示排序指示器
+        header = self.model_table.horizontalHeader()
+        header.setSortIndicator(self.current_sort_column, self.current_sort_order)
+    
+    def sort_models_by_name(self):
+        """按模型名称排序"""
+        if self.current_sort_order == Qt.AscendingOrder:
+            self.models_data.sort(key=lambda x: x['name'].lower())
+        else:
+            self.models_data.sort(key=lambda x: x['name'].lower(), reverse=True)
+        self.update_table_from_data()
+    
+    def sort_models_by_tag(self):
+        """按Tag排序"""
+        if self.current_sort_order == Qt.AscendingOrder:
+            self.models_data.sort(key=lambda x: x['tag'].lower())
+        else:
+            self.models_data.sort(key=lambda x: x['tag'].lower(), reverse=True)
+        self.update_table_from_data()
+    
+    def sort_models_by_id(self):
+        """按ID排序"""
+        if self.current_sort_order == Qt.AscendingOrder:
+            self.models_data.sort(key=lambda x: x.get('id', '').lower())
+        else:
+            self.models_data.sort(key=lambda x: x.get('id', '').lower(), reverse=True)
+        self.update_table_from_data()
+    
+    def sort_models_by_size(self):
+        """按大小排序"""
+        if self.current_sort_order == Qt.AscendingOrder:
+            self.models_data.sort(key=lambda x: self.parse_size(x['size']))
+        else:
+            self.models_data.sort(key=lambda x: self.parse_size(x['size']), reverse=True)
+        self.update_table_from_data()
+    
+    def sort_models_by_date(self):
+        """按日期排序"""
+        if self.current_sort_order == Qt.AscendingOrder:
+            self.models_data.sort(key=lambda x: self.parse_date(x['modified_date']))
+        else:
+            self.models_data.sort(key=lambda x: self.parse_date(x['modified_date']), reverse=True)
+        self.update_table_from_data()
+
+    def keyPressEvent(self, event):
+        """处理键盘快捷键"""
+        if event.key() == Qt.Key_F5:
+            # F5 刷新列表
+            self.load_models()
+        elif event.key() == Qt.Key_Delete:
+            # Delete 键删除选中的模型
+            self.delete_model()
+        elif event.key() == Qt.Key_F and event.modifiers() == Qt.ControlModifier:
+            # Ctrl+F 聚焦到搜索框
+            self.search_input.setFocus()
+            self.search_input.selectAll()
+        elif event.key() == Qt.Key_Escape:
+            # Esc 键清除搜索
+            self.search_input.clear()
+        else:
+            super().keyPressEvent(event)
+
+
+
 
 def main():
-    import argparse
+    # Linux desktop environments use an app's .desktop file to integrate the app
+    # in to their application menus. The .desktop file of this app will include
+    # the StartupWMClass key, set to app's formal name. This helps associate the
+    # app's windows to its menu item.
+    #
+    # For association to work, any windows of the app must have WMCLASS property
+    # set to match the value set in app's desktop file. For PySide6, this is set
+    # with setApplicationName().
+
+    # Find the name of the module that was used to start the app
+    app_module = sys.modules["__main__"].__package__
     
-    # 解析命令行参数
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--lang", help="Language code (e.g., 'zh' for Chinese, 'en' for English)")
-    args, unknown = parser.parse_known_args()
-    language_code = args.lang
-    
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication(sys.argv)
-    
-    window = MainWindow(language_code)
+    # Set application name with fallback
+    try:
+        if app_module:
+            # Retrieve the app's metadata
+            metadata = importlib.metadata.metadata(app_module)
+            QtWidgets.QApplication.setApplicationName(metadata["Formal-Name"])
+        else:
+            # Fallback when running script directly
+            QtWidgets.QApplication.setApplicationName("OlaMoMa")
+    except (ValueError, KeyError, importlib.metadata.PackageNotFoundError):
+        # Fallback for any metadata-related errors
+        QtWidgets.QApplication.setApplicationName("OlaMoMa")
+
+    app = QtWidgets.QApplication(sys.argv)
+    window = MainWindow()
     window.show()
+    if app:
+        try:
+            # Ensure the application stays alive and processes events
+            exit_code = app.exec()
+            # Clean up threads before exiting
+            if window and window.worker_thread and window.worker_thread.isRunning():
+                try:
+                    window.worker_thread.finished.disconnect()
+                except:
+                    pass
+                window.worker_thread.quit()
+                if not window.worker_thread.wait(2000):
+                    window.worker_thread.terminate()
+                    window.worker_thread.wait(1000)
+            sys.exit(exit_code)
+        except KeyboardInterrupt:
+            # Handle Ctrl+C gracefully
+            if window and window.worker_thread and window.worker_thread.isRunning():
+                window.worker_thread.cancel()
+                window.worker_thread.quit()
+                window.worker_thread.wait(2000)
+            sys.exit(0)
+
     return app, window
+
+
 
 if __name__ == "__main__":
     app, window = main()
     if app:
-        sys.exit(app.exec())
-
+        try:
+            # Ensure the application stays alive and processes events
+            exit_code = app.exec()
+            # Clean up threads before exiting
+            if window and window.worker_thread and window.worker_thread.isRunning():
+                try:
+                    window.worker_thread.finished.disconnect()
+                except:
+                    pass
+                window.worker_thread.quit()
+                if not window.worker_thread.wait(2000):
+                    window.worker_thread.terminate()
+                    window.worker_thread.wait(1000)
+            sys.exit(exit_code)
+        except KeyboardInterrupt:
+            # Handle Ctrl+C gracefully
+            if window and window.worker_thread and window.worker_thread.isRunning():
+                window.worker_thread.cancel()
+                window.workerThread.quit()
+                window.worker_thread.wait(2000)
+            sys.exit(0)
